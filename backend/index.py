@@ -6,13 +6,6 @@ import io
 from tensorflow.keras.models import load_model
 from fastapi.middleware.cors import CORSMiddleware
 
-
-shape_model = load_model('shape_model.h5')
-spot_model = load_model('spot_model.h5')
-stem_model = load_model('stem_model.h5')
-webbing_model = load_model('webbing_model.h5')
-diseases = load_model('diseases.h5')
-
 app = FastAPI()
 
 app.add_middleware(
@@ -28,13 +21,21 @@ async def predict(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents))
-        image = image.resize((224, 224))  
-        image_array = np.array(image) / 255.0  
+        image = image.resize((224, 224))
+        image_array = np.array(image) / 255.0
         if image_array.shape[-1] == 3:
-            image_array = np.expand_dims(image_array, axis=0)  
+            image_array = np.expand_dims(image_array, axis=0)
         else:
             return JSONResponse(content={"error": "Input image must have 3 channels (RGB)."}, status_code=400)
 
+        # Load models
+        shape_model = load_model('shape_model.h5')
+        spot_model = load_model('spot_model.h5')
+        stem_model = load_model('stem_model.h5')
+        webbing_model = load_model('webbing_model.h5')
+        diseases = load_model('diseases.h5')
+
+        # Predictions
         shape_prediction = shape_model.predict(image_array)
         shape_class = np.argmax(shape_prediction, axis=1)[0]
         
@@ -42,10 +43,20 @@ async def predict(file: UploadFile = File(...)):
         stem_prediction = stem_model.predict(image_array)
         webbing_prediction = webbing_model.predict(image_array)
         disease_prediction = diseases.predict(image_array)
+
+        # Unload models to save memory
+        del shape_model
+        del spot_model
+        del stem_model
+        del webbing_model
+        del diseases
+
+        # Processing predictions
         result = {}
         result['spot'] = "Yellow spot: ripe" if spot_prediction < 0.5 else "White or pale yellow spot: Not ripe"
         result['stem'] = "Green stem: Not ripe" if stem_prediction < 0.5 else "Brown stem: Ripe"
         result['webbing'] = "Webbing Present: Ripe" if webbing_prediction < 0.5 else "Webbing Not Present: Not ripe"
+
         shape_messages = [
             "The watermelon is Round: Ripe and Sweet",
             "The watermelon is Elongated: Watery",
@@ -53,7 +64,6 @@ async def predict(file: UploadFile = File(...)):
         ]
         result['shape'] = shape_messages[shape_class] if shape_class < len(shape_messages) else "Unknown shape"
         
-     
         disease_names = [
             "Anthracnoseon",
             "Bacterial fruit blotch",
@@ -66,18 +76,19 @@ async def predict(file: UploadFile = File(...)):
             "No diseases"
         ]
 
-        # skipping "Cross Stitch" and "Greasy Spot"
+        # Skipping "Cross Stitch" and "Greasy Spot"
         diseases_present = []
-        for i, prediction in enumerate(disease_prediction[0]):  
-            if prediction > 0.5: 
+        for i, prediction in enumerate(disease_prediction[0]):
+            if prediction > 0.5:
                 if disease_names[i] not in ["Cross Stitch", "Greasy Spot"]:
                     diseases_present.append(disease_names[i])
+
         if diseases_present:
             result['disease'] = "Diseases Present: " + ", ".join(diseases_present)
         else:
             result['disease'] = "No significant diseases detected."
 
-        # Overall recommendation 
+        # Overall recommendation
         if len(diseases_present) == 0:
             overall_recommendation = "This watermelon is likely good to buy."
         else:
@@ -88,4 +99,4 @@ async def predict(file: UploadFile = File(...)):
         return JSONResponse(content=result)
     except Exception as e:
         print(e)
-        return
+        return JSONResponse(content={"error": str(e)}, status_code=500)
